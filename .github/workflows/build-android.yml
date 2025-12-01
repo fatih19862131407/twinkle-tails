@@ -21,9 +21,10 @@ jobs:
           flutter create twinkletails_app
           cp main.dart twinkletails_app/lib/main.dart
 
-      - name: Build Android App Bundle
+      - name: Build Android App Bundle (unsigned release)
         working-directory: twinkletails_app
-        run: flutter build appbundle --release
+        run: |
+          flutter build appbundle --release --no-shrink
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
