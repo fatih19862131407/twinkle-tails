@@ -8,25 +8,118 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
 
       - name: Create Flutter project
         run: |
           flutter create twinkletails_app
+          # Bizim main.dart dosyamızı kullan
           cp main.dart twinkletails_app/lib/main.dart
 
-      - name: Build Android App Bundle (unsigned release)
-        working-directory: twinkletails_app
+      - name: Configure signing (create keystore and update Gradle)
+        working-directory: twinkletails_app/android/app
         run: |
-          flutter build appbundle --release --no-shrink
+          # 1) Upload keystore oluştur
+          keytool -genkey -v \
+            -keystore upload-keystore.jks \
+            -storetype JKS \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -alias upload \
+            -dname "CN=TwinkleTails, OU=Dev, O=Twinkle, L=Istanbul, S=TR, C=TR" \
+            -storepass password \
+            -keypass password
 
-      - name: Upload AAB artifact
+          # 2) Gradle dosyasını release imza kullanacak şekilde güncelle
+          python - << 'PY'
+          from pathlib import Path
+
+          groovy = Path('build.gradle')
+          kts = Path('build.gradle.kts')
+
+          block_groovy_old = """        buildTypes {
+            release {
+                // TODO: Add your own signing config for the release build.
+                // Signing with the debug keys for now,
+                // so `flutter run --release` works.
+                signingConfig signingConfigs.debug
+            }
+        }
+"""
+          block_groovy_new = """        signingConfigs {
+            release {
+                keyAlias 'upload'
+                keyPassword 'password'
+                storeFile file('upload-keystore.jks')
+                storePassword 'password'
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig signingConfigs.release
+            }
+        }
+"""
+
+          block_kts_old = """        buildTypes {
+            release {
+                // TODO: Add your own signing config for the release build.
+                // Signing with the debug keys for now, so `flutter run --release` works.
+                signingConfig = signingConfigs.getByName("debug")
+            }
+        }
+"""
+          block_kts_new = """        signingConfigs {
+            create("release") {
+                keyAlias = "upload"
+                keyPassword = "password"
+                storeFile = file("upload-keystore.jks")
+                storePassword = "password"
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+"""
+
+          if groovy.exists():
+              text = groovy.read_text()
+              if 'signingConfig signingConfigs.debug' in text:
+                  text = text.replace(block_groovy_old, block_groovy_new)
+                  groovy.write_text(text)
+              else:
+                  raise SystemExit("Groovy build.gradle icinde beklenen blok bulunamadi.")
+          elif kts.exists():
+              text = kts.read_text()
+              if 'signingConfig = signingConfigs.getByName("debug")' in text:
+                  text = text.replace(block_kts_old, block_kts_new)
+                  kts.write_text(text)
+              else:
+                  raise SystemExit("Kotlin build.gradle.kts icinde beklenen blok bulunamadi.")
+          else:
+              raise SystemExit("build.gradle veya build.gradle.kts bulunamadi.")
+          PY
+
+      - name: Build Android App Bundle
+        working-directory: twinkletails_app
+        run: flutter build appbundle --release
+
+      - name: Upload app bundle
         uses: actions/upload-artifact@v4
         with:
           name: twinkletails-appbundle
